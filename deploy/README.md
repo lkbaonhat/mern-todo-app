@@ -1,16 +1,16 @@
-# CI/CD hai server, không dùng registry cho image ứng dụng
+# Two-server CI/CD without an application image registry
 
-Luồng: push `main` → self-hosted GitHub Actions Runner (Server 1) → kiểm tra cú pháp backend, build hai image → `docker save` → Jenkins (agent trên Server 1) → SCP → Server 2 `docker load` → Compose health check.
+Flow: push to `main` -> self-hosted GitHub Actions Runner on Server 1 -> backend syntax checks and two image builds -> `docker save` -> Jenkins agent on Server 1 -> SCP -> `docker load` on Server 2 -> Compose health checks.
 
-Tag có dạng `<commit SHA>-<run ID>-<attempt>`; mỗi lần chạy có thư mục riêng. Gói gồm `images.tar`, `compose.yml`, `deploy.sh`, `SHA256SUMS`. Jenkins deploy đúng cấu hình đi kèm image, không checkout bản mới nhất rồi trộn phiên bản. GitHub Actions thành công chỉ xác nhận Jenkins đã nhận yêu cầu; kết quả deploy xem trong Jenkins.
+Tags use `<commit SHA>-<run ID>-<attempt>`, with a separate directory for each run. Each bundle contains `images.tar`, `compose.yml`, `deploy.sh`, and `SHA256SUMS`. Jenkins deploys the configuration packaged with the images. A successful GitHub Actions run only confirms that Jenkins accepted the request; check Jenkins for the deployment result.
 
 ## 1. Server 1 (Ubuntu/Debian, Linux x64)
 
-Cài Docker Engine, Docker Compose v2, Node.js 22+, Git, curl, OpenSSH client và Jenkins. Tạo runner từ GitHub repo → Settings → Actions → Runners → New self-hosted runner. Thêm label `mern-build`, chạy runner bằng service. Chỉ workflow push main và manual trên main được dùng runner này; không thêm trigger PR từ nguồn không tin cậy.
+Install Docker Engine, Docker Compose v2, Node.js 22+, Git, curl, the OpenSSH client, and Jenkins. In the GitHub repository, open Settings -> Actions -> Runners -> New self-hosted runner. Add the `mern-build` label and run the runner as a service. Use this runner only for pushes to main and manual runs on main. Do not add pull request triggers for untrusted sources.
 
-Runner và Jenkins agent cần chạy trên cùng Server 1 và truy cập cùng thư mục artifact. Nếu Jenkins chạy trong container, bind mount `/opt/ci-artifacts/mern-todo` với đúng đường dẫn và quyền đọc tương ứng. Tạo agent label `mern-deploy` trên Server 1 (không dùng `agent any`).
+The runner and Jenkins agent must run on Server 1 and access the same artifact directory. If Jenkins runs in a container, bind mount `/opt/ci-artifacts/mern-todo` at the same path with the appropriate read permissions. Configure a Jenkins agent on Server 1 with the `mern-deploy` label instead of using `agent any`.
 
-Ví dụ chuẩn bị quyền, thay `RUNNER_USER` bằng user thật của runner:
+Set up permissions, replacing `RUNNER_USER` with the actual runner account:
 
 ```bash
 sudo groupadd -f ci-artifacts
@@ -20,11 +20,11 @@ sudo install -d -o RUNNER_USER -g ci-artifacts -m 2750 /opt/ci-artifacts/mern-to
 sudo usermod -aG docker RUNNER_USER
 ```
 
-Khởi động lại service runner/Jenkins agent để nhận group mới. Jenkins chỉ cần SSH/SCP và đọc artifact; không cần Docker local. Runner cần ghi artifact, Docker và Node. Quyền nhóm Docker tương đương quyền quản trị host.
+Restart the runner and Jenkins agent services to apply group membership. Jenkins needs SSH/SCP and read access to artifacts; it does not need local Docker access. The runner needs artifact write access, Docker, and Node. Membership in the Docker group grants host administrator privileges.
 
 ## 2. Server 2
 
-Cài Docker Engine, Docker Compose **v2.20+**, Bash, `flock` (util-linux), sha256sum và OpenSSH server. Hai server cần cùng kiến trúc Linux x64; nếu khác kiến trúc phải đổi build sang target phù hợp.
+Install Docker Engine, Docker Compose **v2.20+**, Bash, `flock` from util-linux, sha256sum, and the OpenSSH server. Both servers must use Linux x64; adjust the build target if their architectures differ.
 
 ```bash
 sudo adduser deploy
@@ -32,41 +32,41 @@ sudo usermod -aG docker deploy
 sudo install -d -o deploy -g deploy -m 750 /opt/mern-todo /opt/mern-todo/releases
 ```
 
-Đặt public key dành riêng cho Jenkins trong `/home/deploy/.ssh/authorized_keys`; bảo đảm quyền `.ssh` là 700, `authorized_keys` là 600. Kiểm tra SSH hoạt động dưới user `deploy`, không cần sudo tương tác khi gọi Docker.
+Place the dedicated Jenkins public key in `/home/deploy/.ssh/authorized_keys`. Set permissions to 700 for `.ssh` and 600 for `authorized_keys`. Verify that SSH works as `deploy` and Docker does not require an interactive sudo prompt.
 
-Sao chép `backend.env.example` thành `/opt/mern-todo/backend.env`, điền `MONGO_URI`, `JWT_SECRET` và quyền 600 cho user deploy. MongoDB phải sẵn sàng và Server 2 truy cập được. Pipeline **không cài MongoDB**, không chuyển dữ liệu DB trong image và không ghi đè file env trên server.
+Copy `backend.env.example` to `/opt/mern-todo/backend.env`, set `MONGO_URI` and `JWT_SECRET`, and restrict the file to the deploy user with mode 600. MongoDB must be running and reachable from Server 2. The pipeline **does not install MongoDB**, package database data in images, or overwrite the server's environment file.
 
-Mở TCP 22 từ Server 1 đến Server 2 và TCP 80 cho người dùng. Backend chỉ ở mạng Compose, không mở cổng 8001 ra host. Truy cập web qua `http://SERVER2`; Nginx chuyển `/api` đến backend và hỗ trợ React Router. HTTPS/domain có thể cấu hình thêm ở reverse proxy trước cổng 80.
+Allow TCP port 22 from Server 1 to Server 2 and TCP port 80 for users. The backend stays on the Compose network; port 8001 is not exposed on the host. Open `http://SERVER2` to access the application. Nginx forwards `/api` to the backend and supports React Router. Configure HTTPS and a domain with a reverse proxy in front of port 80 if needed.
 
 ## 3. Jenkins
 
-Cài các plugin Pipeline, SSH Agent và Credentials Binding. Tạo credentials:
+Install the Pipeline, SSH Agent, and Credentials Binding plugins. Create these credentials:
 
-| ID | Loại | Giá trị |
+| ID | Type | Value |
 | --- | --- | --- |
-| `mern-server2-ssh` | SSH Username with private key | User `deploy`, private key tương ứng trên Server 2 |
-| `mern-known-hosts` | Secret file | File known_hosts chứa host key Server 2 đã xác minh fingerprint qua kênh tin cậy |
-| `mern-deploy-host` | Secret text | Hostname hoặc IPv4 Server 2; không có user, port hoặc URL |
+| `mern-server2-ssh` | SSH Username with private key | User `deploy` and the private key matching the public key on Server 2 |
+| `mern-known-hosts` | Secret file | A known_hosts file containing the Server 2 host key, with its fingerprint verified through a trusted channel |
+| `mern-deploy-host` | Secret text | Server 2 hostname or IPv4 address, without a username, port, or URL |
 
-Pipeline hiện dùng SSH port 22 và user deploy. Không tắt kiểm tra host key; nếu dùng ssh-keyscan để thu key, phải xác minh fingerprint trước khi đưa vào credentials.
+The pipeline uses SSH port 22 and the deploy user. Keep host key verification enabled. If you collect the key with ssh-keyscan, verify its fingerprint before storing it in Jenkins credentials.
 
-Tạo job Pipeline tên `mern-todo-deploy`, chọn Pipeline script from SCM → Git → repo này, branch `main`, Script Path `Jenkinsfile`. Chạy job lần đầu để Jenkins tạo parameter `IMAGE_TAG`; có thể fail ở bước validate vì chưa có tag, đây là bước khởi tạo job. Sau đó Actions mới gọi buildWithParameters được.
+Create a Pipeline job named `mern-todo-deploy`. Select Pipeline script from SCM -> Git -> this repository, branch `main`, and Script Path `Jenkinsfile`. Run the job once to initialize the `IMAGE_TAG` parameter. This initial run may fail validation because no tag is supplied. After initialization, Actions can call buildWithParameters.
 
-Tạo API token cho user Jenkins có quyền Build trên job. Jenkins URL phải truy cập được từ runner. Với HTTPS, dùng chứng chỉ được tin cậy. Jenkins hiện đại cho phép token API được miễn CSRF crumb; nếu cấu hình trả 403, kiểm tra quyền, reverse proxy và CSRF, không tắt CSRF để chữa lỗi.
+Create an API token for a Jenkins user with Build permission on the job. The runner must be able to reach the Jenkins URL. Use a trusted certificate for HTTPS. Modern Jenkins exempts API token authentication from the CSRF crumb requirement. If you receive HTTP 403, check permissions, the reverse proxy, and CSRF configuration instead of disabling CSRF protection.
 
 ## 4. GitHub Actions secrets
 
-Vào Settings → Secrets and variables → Actions, tạo:
+Open Settings -> Secrets and variables -> Actions and create:
 
-- `JENKINS_JOB_URL`: URL đầy đủ của job, ví dụ `https://jenkins.example.com/job/mern-todo-deploy` (job trong folder cần đủ `/job/folder/job/name`).
-- `JENKINS_USER`: user Jenkins.
-- `JENKINS_TOKEN`: API token của user đó.
+- `JENKINS_JOB_URL`: the full job URL, such as `https://jenkins.example.com/job/mern-todo-deploy`. Jobs inside folders need the full `/job/folder/job/name` path.
+- `JENKINS_USER`: the Jenkins username.
+- `JENKINS_TOKEN`: that user's API token.
 
-Merge nhánh cấu hình vào main sau khi server đã sẵn sàng, hoặc chọn Actions → Build and hand off to Jenkins → Run workflow trên main. Không ghi credentials vào repo hoặc gửi private key/token vào chat.
+Merge the configuration branch into main after the servers are ready, or select Actions -> Build and hand off to Jenkins -> Run workflow on main. Do not commit credentials or share private keys or tokens in chat.
 
-## 5. Xác nhận và khôi phục
+## 5. Verification and recovery
 
-Trong Jenkins, kiểm tra Transfer and deploy thành công. Trên Server 2:
+Confirm that the Transfer and deploy stage succeeds in Jenkins. On Server 2, run:
 
 ```bash
 cat /opt/mern-todo/current
@@ -74,16 +74,16 @@ curl --fail http://localhost/api/health
 IMAGE_TAG=$(cat /opt/mern-todo/current) docker compose -p mern-todo -f /opt/mern-todo/releases/$(cat /opt/mern-todo/current)/compose.yml ps
 ```
 
-Health endpoint trả 200 khi MongoDB connected, 503 khi chưa sẵn sàng. Frontend health check kiểm tra API qua Nginx. Nếu Compose không healthy trong thời hạn, script thử chạy lại release trước và Jenkins vẫn báo failure để thấy lần deploy mới bị lỗi. Lần deploy đầu chưa có release trước để rollback. Cập nhật này có thể gián đoạn ngắn khi thay container; không phải zero-downtime.
+The health endpoint returns HTTP 200 when MongoDB is connected and HTTP 503 otherwise. The frontend health check requests the API through Nginx. If Compose does not become healthy before the timeout, the script attempts to restore the previous release. Jenkins still reports failure to flag the failed deployment. The first deployment has no previous release to restore. Container replacement can cause a short interruption; this setup does not provide zero-downtime deployment.
 
-Rollback thủ công: chạy lại job Jenkins với tag cũ còn đủ artifact trên Server 1, hoặc trên Server 2 chạy `bash /opt/mern-todo/releases/TAG/deploy.sh TAG`. Chỉ chạy một Jenkins job quản lý app; script dùng flock để tránh hai lần cập nhật container đồng thời. Không chạy lại cùng tag đồng thời khi đang chuyển file.
+For manual rollback, rerun the Jenkins job with an older tag whose artifacts remain on Server 1, or run `bash /opt/mern-todo/releases/TAG/deploy.sh TAG` on Server 2. Use one Jenkins job to manage this application. The script uses flock to prevent simultaneous container updates. Do not transfer the same tag concurrently.
 
-Dọn artifact/image theo lịch sau khi xác nhận release mới ổn định. Giữ ít nhất release hiện tại và bản rollback cùng image của chúng trên Server 2. Không dùng `docker system prune -a` tùy tiện. Chưa tự động xóa để tránh mất bản cần rollback.
+Schedule artifact and image cleanup after confirming that a new release is stable. Keep at least the current release, the rollback release, and their images on Server 2. Avoid indiscriminate use of `docker system prune -a`. Automatic cleanup is not configured so that rollback artifacts remain available.
 
-## Giới hạn và kiểm thử
+## Limitations and testing
 
-Repo chưa có bộ test ứng dụng; backend `npm test` hiện chỉ là placeholder báo lỗi. Workflow kiểm tra cú pháp backend và build React trong Docker, chưa thay thế unit/integration test. Đã bổ sung backend package-lock.json; cả hai Dockerfile dùng npm ci để cài theo lockfile.
+The repository does not yet contain an application test suite; backend `npm test` is a placeholder that exits with an error. The workflow checks backend syntax and builds React in Docker. These checks do not replace unit or integration tests. A backend package-lock.json is included, and both Dockerfiles use npm ci to install locked dependencies.
 
-Không cần tài khoản Docker Hub hoặc push image ứng dụng lên registry. Docker vẫn cần tải base image Node/Nginx và npm dependencies trong lần build đầu. Server 2 nhận image qua tar, không pull image ứng dụng.
+No Docker Hub account or application image push is required. Docker still downloads Node/Nginx base images and npm dependencies during the initial build. Server 2 receives application images in the tar archive.
 
-Chức năng quên mật khẩu trong code gốc vẫn chứa URL frontend và địa chỉ gửi mail cố định; cần chỉnh riêng trước khi dùng chức năng đó trên domain mới.
+The existing password reset implementation contains a fixed frontend URL and sender email address. Update those separately before using password reset on a new domain.
