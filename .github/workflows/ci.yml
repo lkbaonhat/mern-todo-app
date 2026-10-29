@@ -1,0 +1,58 @@
+name: Build and hand off to Jenkins
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mern-todo-main
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, mern-build]
+    timeout-minutes: 40
+    env:
+      ARTIFACT_ROOT: /opt/ci-artifacts/mern-todo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check backend syntax
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' source; do
+            node --check "$source"
+          done < <(find backend -name '*.js' -not -path '*/node_modules/*' -print0)
+      - name: Build frontend and backend images
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          docker build -t "mern-todo-backend:$IMAGE_TAG" backend
+          docker build -t "mern-todo-frontend:$IMAGE_TAG" frontend
+      - name: Export immutable deployment bundle
+        run: |
+          set -euo pipefail
+          umask 0027
+          mkdir -p "$ARTIFACT_ROOT"
+          staging=$(mktemp -d "$ARTIFACT_ROOT/.build.XXXXXX")
+          trap 'rm -rf "$staging"' EXIT
+          docker save -o "$staging/images.tar" "mern-todo-backend:$IMAGE_TAG" "mern-todo-frontend:$IMAGE_TAG"
+          cp deploy/compose.yml deploy/deploy.sh "$staging/"
+          (cd "$staging" && sha256sum images.tar compose.yml deploy.sh > SHA256SUMS)
+          test ! -e "$ARTIFACT_ROOT/$IMAGE_TAG"
+          mv "$staging" "$ARTIFACT_ROOT/$IMAGE_TAG"
+      - name: Trigger Jenkins deployment
+        env:
+          JENKINS_JOB_URL: ${{ secrets.JENKINS_JOB_URL }}
+          JENKINS_USER: ${{ secrets.JENKINS_USER }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${JENKINS_JOB_URL:?Missing JENKINS_JOB_URL}"
+          : "${JENKINS_USER:?Missing JENKINS_USER}"
+          : "${JENKINS_TOKEN:?Missing JENKINS_TOKEN}"
+          curl --fail-with-body --connect-timeout 10 --max-time 60 \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --data-urlencode "IMAGE_TAG=$IMAGE_TAG" \
+            "${JENKINS_JOB_URL%/}/buildWithParameters"
