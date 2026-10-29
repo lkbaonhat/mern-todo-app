@@ -86,7 +86,7 @@ Backend `npm test` verifies metrics output, database readiness, and bounded requ
 
 No Docker Hub account or application image push is required. Docker still downloads Node/Nginx base images and npm dependencies during the initial build. Server 2 receives application images in the tar archive.
 
-The existing password reset implementation contains a fixed frontend URL and sender email address. Update those separately before using password reset on a new domain.
+Task notifications and password resets use configurable Mailcow SMTP settings. See [Mailcow setup](mailcow/README.md) for the dedicated mail host installer, DNS records, mailbox setup, TLS and submission checks.
 
 ## 6. Prometheus and Grafana
 
@@ -125,3 +125,7 @@ curl --get --data-urlencode 'query=up{job="mern-backend"}' http://127.0.0.1:9090
 ```
 
 The Prometheus query should return 1. A value of 0 means scraping failed; check backend logs and Prometheus Targets. A scrape can succeed while MongoDB is unavailable, so also check mongodb_connected and the application's /api/health endpoint.
+
+## 7. Mailcow email delivery
+
+Configure `FRONTEND_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in `/opt/mern-todo/backend.env` before using email features. Follow [mailcow/README.md](mailcow/README.md) for installation and verification. Mailcow runs separately from the application Compose project; its installer is never run automatically by CI/CD.
