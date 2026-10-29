@@ -29,6 +29,10 @@ mongoose.connect(process.env.MONGO_URI, {
 })
 
 //api endpoints
+app.get("/api/health", (req, res) => {
+    const ready = mongoose.connection.readyState === 1
+    res.status(ready ? 200 : 503).json({ status: ready ? "ok" : "unavailable" })
+})
 app.use("/api/user", userRouter)
 app.use("/api/task", taskRouter)
 app.use("/api/forgotPassword", forgotPasswordRouter)
