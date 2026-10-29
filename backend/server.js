@@ -2,6 +2,7 @@ import express from "express"
 import mongoose from "mongoose"
 import cors from "cors"
 import dotenv from "dotenv"
+import { configureMetrics } from "./metrics.js"
 
 import userRouter from "./routes/userRoute.js"
 import taskRouter from "./routes/taskRoute.js"
@@ -14,6 +15,7 @@ const port = process.env.PORT || 8001
 mongoose.set('strictQuery', true);
 
 //middlewares
+configureMetrics(app, () => mongoose.connection.readyState)
 app.use(express.json())
 app.use(cors())
 

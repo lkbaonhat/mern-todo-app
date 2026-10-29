@@ -10,6 +10,7 @@ flock -x 9
 cd "$RELEASE"
 sha256sum --check SHA256SUMS
 [[ -s "$ROOT/backend.env" ]] || { echo 'Missing backend.env' >&2; exit 1; }
+[[ -s "$ROOT/grafana-admin-password" ]] || { echo 'Missing grafana-admin-password' >&2; exit 1; }
 docker load -i images.tar
 previous=''
 if [[ -f "$ROOT/current" ]]; then

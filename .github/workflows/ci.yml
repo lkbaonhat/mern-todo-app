@@ -30,6 +30,15 @@ jobs:
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           docker build -t "mern-todo-backend:$IMAGE_TAG" backend
           docker build -t "mern-todo-frontend:$IMAGE_TAG" frontend
+          docker pull prom/prometheus:v3.2.1
+          docker pull grafana/grafana:11.6.0
+      - name: Validate metrics and Prometheus configuration
+        run: |
+          set -euo pipefail
+          docker run --rm "mern-todo-backend:$IMAGE_TAG" npm test
+          docker run --rm --entrypoint /bin/promtool \
+            -v "$PWD/deploy/monitoring/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.2.1 check config /etc/prometheus/prometheus.yml
       - name: Export immutable deployment bundle
         run: |
           set -euo pipefail
@@ -37,9 +46,11 @@ jobs:
           mkdir -p "$ARTIFACT_ROOT"
           staging=$(mktemp -d "$ARTIFACT_ROOT/.build.XXXXXX")
           trap 'rm -rf "$staging"' EXIT
-          docker save -o "$staging/images.tar" "mern-todo-backend:$IMAGE_TAG" "mern-todo-frontend:$IMAGE_TAG"
+          docker save -o "$staging/images.tar" "mern-todo-backend:$IMAGE_TAG" "mern-todo-frontend:$IMAGE_TAG" prom/prometheus:v3.2.1 grafana/grafana:11.6.0
           cp deploy/compose.yml deploy/deploy.sh "$staging/"
-          (cd "$staging" && sha256sum images.tar compose.yml deploy.sh > SHA256SUMS)
+          cp -R deploy/monitoring "$staging/monitoring"
+          chmod -R a+rX "$staging/monitoring"
+          (cd "$staging" && find images.tar compose.yml deploy.sh monitoring -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           test ! -e "$ARTIFACT_ROOT/$IMAGE_TAG"
           mv "$staging" "$ARTIFACT_ROOT/$IMAGE_TAG"
       - name: Trigger Jenkins deployment

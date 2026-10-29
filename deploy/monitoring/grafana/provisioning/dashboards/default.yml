@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: MERN Todo
+    orgId: 1
+    folder: MERN Todo
+    type: file
+    disableDeletion: false
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

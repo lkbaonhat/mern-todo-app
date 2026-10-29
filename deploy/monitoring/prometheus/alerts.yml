@@ -1,0 +1,24 @@
+groups:
+  - name: mern-todo
+    rules:
+      - alert: BackendDown
+        expr: up{job="mern-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backend metrics have been unreachable for two minutes
+      - alert: MongoDBDisconnected
+        expr: mongodb_connected{job="mern-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: The backend has lost its MongoDB connection
+      - alert: HighServerErrorRate
+        expr: sum(rate(http_requests_total{job="mern-backend",status_code=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="mern-backend"}[5m])), 0.001) > 0.05 and sum(increase(http_requests_total{job="mern-backend"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than five percent of application requests return server errors
