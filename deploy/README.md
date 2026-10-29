@@ -2,7 +2,7 @@
 
 Flow: push to `main` -> self-hosted GitHub Actions Runner on Server 1 -> backend syntax checks and two image builds -> `docker save` -> Jenkins agent on Server 1 -> SCP -> `docker load` on Server 2 -> Compose health checks.
 
-Tags use `<commit SHA>-<run ID>-<attempt>`, with a separate directory for each run. Each bundle contains `images.tar`, `compose.yml`, `deploy.sh`, and `SHA256SUMS`. Jenkins deploys the configuration packaged with the images. A successful GitHub Actions run only confirms that Jenkins accepted the request; check Jenkins for the deployment result.
+Tags use `<commit SHA>-<run ID>-<attempt>`, with a separate directory for each run. Each bundle contains `images.tar`, `compose.yml`, `deploy.sh`, `SHA256SUMS`, and the `monitoring/` configuration directory. Jenkins deploys the configuration packaged with the images. A successful GitHub Actions run only confirms that Jenkins accepted the request; check Jenkins for the deployment result.
 
 ## 1. Server 1 (Ubuntu/Debian, Linux x64)
 
@@ -82,8 +82,50 @@ Schedule artifact and image cleanup after confirming that a new release is stabl
 
 ## Limitations and testing
 
-The repository does not yet contain an application test suite; backend `npm test` is a placeholder that exits with an error. The workflow checks backend syntax and builds React in Docker. These checks do not replace unit or integration tests. A backend package-lock.json is included, and both Dockerfiles use npm ci to install locked dependencies.
+Backend `npm test` verifies metrics output, database readiness, and bounded request labels. The workflow also checks backend syntax, builds React, and validates Prometheus configuration with promtool. This is not a complete application test suite. A backend package-lock.json is included, and both Dockerfiles use npm ci to install locked dependencies.
 
 No Docker Hub account or application image push is required. Docker still downloads Node/Nginx base images and npm dependencies during the initial build. Server 2 receives application images in the tar archive.
 
-The existing password reset implementation contains a fixed frontend URL and sender email address. Update those separately before using password reset on a new domain.
+Task notifications and password resets use configurable Mailcow SMTP settings. See [Mailcow setup](mailcow/README.md) for the dedicated mail host installer, DNS records, mailbox setup, TLS and submission checks.
+
+## 6. Prometheus and Grafana
+
+The same Compose project runs Prometheus and Grafana on Server 2. GitHub Actions pulls their pinned images on Server 1 and includes them in images.tar. Jenkins transfers the monitoring configuration with the release, verifies its checksums, and deploys all four services. Server 2 does not need registry access. Prometheus/Grafana image versions are pinned in both the workflow and Compose; update both locations together.
+
+Before the first deployment with monitoring, create the Grafana bootstrap password file on Server 2:
+
+```bash
+openssl rand -base64 32 | sudo tee /opt/mern-todo/grafana-admin-password > /dev/null
+sudo chown deploy:472 /opt/mern-todo/grafana-admin-password
+sudo chmod 640 /opt/mern-todo/grafana-admin-password
+```
+
+The file must be readable by the deploy user and Grafana's container user (UID 472). With standard Docker, group 472 and mode 640 allow the container's supplemental group to read the secret; configure Compose group_add as shown in compose.yml. User namespace remapping or rootless Docker requires matching the mapped host IDs. No password is committed or placed in the artifact bundle. Read the file locally on Server 2 when signing in as admin, then store the password securely. The bootstrap value only initializes a new Grafana database; changing the file does not rotate an existing admin password.
+
+Both interfaces bind only to Server 2 loopback. From your workstation, open a tunnel:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 deploy@SERVER2
+```
+
+Visit http://localhost:3000 for Grafana and http://localhost:9090 for Prometheus. Grafana provisions the Prometheus data source and the **MERN Todo Overview** dashboard automatically. Anonymous access and self-registration are disabled. Do not open ports 3000 or 9090 publicly without configuring authenticated HTTPS access.
+
+The dashboard includes backend scrape availability, MongoDB connectivity, request rate, HTTP 5xx percentage, p95 request latency, resident memory, CPU usage, and event loop lag. Generate application traffic and wait for at least two scrapes before expecting rate and latency panels to populate. HTTP labels use route templates, never user IDs, tokens, or query strings. Health probes and metrics scrapes are excluded from application traffic metrics. This setup monitors the backend process, not host resources or MongoDB internals.
+
+Prometheus scrapes backend:8001/metrics on the Compose network every 15 seconds. The backend port is not published, and Nginx blocks the public /metrics path. Alert rules cover an unreachable backend, a disconnected database, and sustained server errors. View pending/firing alerts in Prometheus; notification delivery is not configured because no Alertmanager or notification receiver is supplied.
+
+Prometheus retains up to 15 days of samples with a 2 GB retention target. Named volumes persist Prometheus samples and Grafana state across container replacement and application rollback. Do not run docker compose down -v unless you intend to delete that data. Rolling application configuration back does not roll back monitoring database schemas; review compatibility before changing monitoring image versions. Leave disk headroom beyond the retention target for WAL, Grafana data, and deployment artifacts.
+
+Verification:
+
+```bash
+curl --fail http://127.0.0.1:9090/-/ready
+curl --fail http://127.0.0.1:3000/api/health
+curl --get --data-urlencode 'query=up{job="mern-backend"}' http://127.0.0.1:9090/api/v1/query
+```
+
+The Prometheus query should return 1. A value of 0 means scraping failed; check backend logs and Prometheus Targets. A scrape can succeed while MongoDB is unavailable, so also check mongodb_connected and the application's /api/health endpoint.
+
+## 7. Mailcow email delivery
+
+Configure `FRONTEND_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in `/opt/mern-todo/backend.env` before using email features. Follow [mailcow/README.md](mailcow/README.md) for installation and verification. Mailcow runs separately from the application Compose project; its installer is never run automatically by CI/CD.

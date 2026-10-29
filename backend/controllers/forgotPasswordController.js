@@ -1,12 +1,13 @@
 import userModel from "../models/userModel.js";
-import { createTransport } from "nodemailer"
+import { sendMail, resetPasswordUrl, escapeHtml } from "../services/mail.js"
 import crypto from "crypto"
 import bcrypt from "bcrypt"
 import dotenv from "dotenv"
 dotenv.config()
 
 // Route to handle "forgot password" request
-const forgotPassword = async (req, res) => {
+const forgotPassword = async (req, res, next) => {
+    try {
     const { email } = req.body;
     
     // Check if email exists in the database
@@ -20,35 +21,22 @@ const forgotPassword = async (req, res) => {
     user.resetToken = resetToken;
     await user.save();
     
-    //Send email with reset token
-    const resetUrl = `https://todo-app-b96a5.web.app/resetPassword?token=${resetToken}`;
-    var transporter = createTransport({
-        service: 'gmail',
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: {
-            user: process.env.GMAIL_USERNAME,
-            pass: process.env.GMAIL_PASSWORD
-        }
-    });
-
-    var mailOptions = {
-        from: 'alok.yadav6000@gmail.com',
-        to: email,
-        subject: "Reset Password",
-        html:`<h1>Reset Password</h1><h2>Click on the link to reset your password</h2><h3>${resetUrl}</h3>`
-    };
-
-    await transporter.sendMail(mailOptions, function (error, info) {
-        if (error) {
-            console.log(error);
-        } else {
-            console.log('Email sent: ' + info.response);
-        }
-    });
+    // Only report success after the SMTP server accepts the reset email.
+    try {
+        const resetUrl = resetPasswordUrl(resetToken);
+        await sendMail({
+            to: email,
+            subject: "Reset Password",
+            text: `Reset your password: ${resetUrl}`,
+            html: `<h1>Reset Password</h1><p><a href="${escapeHtml(resetUrl)}">Reset your password</a></p>`
+        });
+    } catch {
+        console.error("Password reset email could not be submitted");
+        return res.status(503).json({ message: "Unable to send the reset email. Please try again later." });
+    }
     
-    res.status(200).json({ message: 'A link to reset your password have been sent to your email.' });
+    res.status(200).json({ message: 'A link to reset your password has been sent to your email.' });
+    } catch (error) { next(error); }
   };
   
 //  Route to handle password reset request
@@ -56,7 +44,6 @@ const resetPassword = async (req, res) => {
     const { token, password } = req.body;
     
     // Verify reset token
-    console.log("token: ", token);
     const user = await userModel.findOne({ resetToken:token });
     if (!user) {
       return res.status(400).json({ message: 'Invalid token' });

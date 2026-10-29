@@ -40,6 +40,7 @@ release="/opt/mern-todo/releases/$IMAGE_TAG"
 opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=10)
 ssh "${opts[@]}" "$remote" "mkdir -p '$release'"
 scp "${opts[@]}" "$ARTIFACT_ROOT/$IMAGE_TAG/"{images.tar,compose.yml,deploy.sh,SHA256SUMS} "$remote:$release/"
+scp -r "${opts[@]}" "$ARTIFACT_ROOT/$IMAGE_TAG/monitoring" "$remote:$release/"
 ssh "${opts[@]}" "$remote" "cd '$release' && sha256sum --check SHA256SUMS && bash deploy.sh '$IMAGE_TAG'"
 '''
                     }
