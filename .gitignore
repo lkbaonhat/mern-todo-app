@@ -20,6 +20,8 @@ yarn-error.log*
 .env.*
 *.env
 !.env.example
+# public API URL baked into the React build (not a secret)
+!frontend/.env.production
 *.pem
 *.key
 
