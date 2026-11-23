@@ -5,10 +5,11 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node dist/server.js",
-    "build": "esbuild server.js --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "start": "node dist/main",
+    "build": "esbuild server.js --bundle --platform=node --format=cjs --packages=external --outfile=dist/main && node scripts/postbuild.js",
     "test": "node --test test/*.test.js",
-    "dev": "node server.js"
+    "dev": "node --watch server.js",
+    "smoke": "node scripts/smoke.js"
   },
   "author": "",
   "license": "ISC",
