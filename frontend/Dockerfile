@@ -9,7 +9,7 @@ COPY package.json .
 # build
 COPY . .
 
-RUN npm build
+RUN npm run build
 
 FROM nginx:alpine
 
