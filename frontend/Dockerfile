@@ -5,6 +5,7 @@ WORKDIR /app
 # download library
 COPY package-lock.json .
 COPY package.json .
+RUN npm install
 
 # build
 COPY . .
