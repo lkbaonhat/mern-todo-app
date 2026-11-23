@@ -1,0 +1,29 @@
+services:
+  database:
+    image: mongodb/mongodb-community-server:8.0-ubi8
+    container_name: database
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=
+      - MONGO_INITDB_ROOT_PASSWORD=
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data/db
+  backend:
+    image: mern_todo_app_be_image
+    container_name: mern_todo_app_be
+    ports:
+      - 8001:8080
+    env_file:
+      - ../backend/.env
+    depends_on:
+      - database
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    image: mern_todo_app_fe_image
+    container_name: mern_todo_app_fe
+    ports:
+      - 3001:80
