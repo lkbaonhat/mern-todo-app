@@ -9,7 +9,11 @@ services:
       - type: bind
         source: ./data
         target: /data/db
+
   backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
     image: mern_todo_app_be_image
     container_name: mern_todo_app_be
     ports:
